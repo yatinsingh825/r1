@@ -3,10 +3,15 @@ import joblib
 
 app = Flask(__name__)
 
-# Load model
-model = joblib.load("model.pkl")
+# 🔥 Load models
+price_model = joblib.load("price_model.pkl")
+demand_model = joblib.load("demand_model.pkl")
 
-# Load encoders
+# 🔥 Load scaler + flag
+scaler = joblib.load("scaler.pkl")
+use_scaler = joblib.load("use_scaler.pkl")
+
+# 🔥 Load encoders
 encoders = {
     "airline": joblib.load("airline_encoder.pkl"),
     "source_city": joblib.load("source_city_encoder.pkl"),
@@ -18,9 +23,10 @@ encoders = {
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.json
-
     try:
+        data = request.json
+
+        # 🔥 Encode features
         features = [[
             encoders["airline"].transform([data["airline"]])[0],
             encoders["source_city"].transform([data["source_city"]])[0],
@@ -32,14 +38,23 @@ def predict():
             data["days_left"]
         ]]
 
-        price = model.predict(features)[0]
+        # 🔥 Apply scaling ONLY if needed
+        if use_scaler:
+            features = scaler.transform(features)
+
+        # 🔥 Predict
+        base_price = price_model.predict(features)[0]
+        demand_score = demand_model.predict(features if not use_scaler else scaler.inverse_transform(features))[0]
 
         return jsonify({
-            "predicted_price": int(price)
+            "base_price": int(base_price),
+            "demand_score": float(demand_score)
         })
 
     except Exception as e:
         return jsonify({"error": str(e)})
 
+# 🔥 Start server
 if __name__ == "__main__":
-    app.run(port=8000)
+    print("🚀 AI Model Server running on http://localhost:8000")
+    app.run(host="0.0.0.0", port=8000, debug=True)

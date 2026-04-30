@@ -5,6 +5,8 @@ import {
   PieChart, Pie, Cell
 } from "recharts";
 
+
+
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const API  = "http://localhost:5000/api";
 const SSE  = "http://localhost:5000/api/stream";
@@ -320,6 +322,7 @@ const ConfirmTab = ({ bookResult, myBookings, user, card, btnPri, fmt, fetchMyBo
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const [recommendations, setRecommendations] = useState([]);
   const [tab,         setTab]        = useState("search");
   const [user,        setUser]       = useState(() => { try { return JSON.parse(localStorage.getItem("skyai_user")); } catch { return null; } });
   const [authMode,    setAuthMode]   = useState("login");
@@ -809,9 +812,21 @@ export default function App() {
                       </div>
                       <div style={{ textAlign:"right", minWidth:180 }}>
                         <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"flex-end", marginBottom:4 }}>
-                          <AiTag />
+                          <AiTag label="ML + Demand Pricing" />
                           <div style={{ fontSize:28, fontWeight:800, color:"#3b82f6" }}>
-                            <LiveNum value={f.aiPrice} prefix="₹" />
+                            <div>
+  <div style={{ fontSize: 26, fontWeight: 800, color: "#3b82f6" }}>
+    <LiveNum value={f.aiPrice} prefix="₹" />
+  </div>
+
+  <div style={{ fontSize: 11, color: "#64748b" }}>
+    Base: ₹{f.basePrice}
+  </div>
+
+  <div style={{ fontSize: 11, color: "#8b5cf6" }}>
+    Demand: {(f.demandIndex * 100).toFixed(0)}%
+  </div>
+</div>
                           </div>
                         </div>
                         <div style={{ fontSize:11, color:"#475569", marginBottom:10 }}>
@@ -821,7 +836,11 @@ export default function App() {
                           </span>
                         </div>
                         <button style={{ ...btnPri, padding:"9px 22px", fontSize:13 }} className="btn-hover"
-                          onClick={()=>{ setSelFlight(f); setChosenSeat(null); setTab("seats"); }}>
+                          onClick={()=>{ setSelFlight(f);
+
+apiFetch(`/flights/${f.flightId}/recommendations`)
+  .then(setRecommendations)
+  .catch(() => {}); setChosenSeat(null); setTab("seats"); }}>
                           Select & Book →
                         </button>
                       </div>
@@ -894,7 +913,7 @@ export default function App() {
                   <div style={{ ...card, padding:22 }}>
                     <div style={{ marginBottom:14 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:5 }}>
-                        <AiTag />
+                        <AiTag label="ML + Demand Pricing" />
                         <span style={{ fontSize:12, color:"#64748b" }}>Live AI Price (updates every 4s)</span>
                         <PulseDot size={6} />
                       </div>
@@ -959,6 +978,7 @@ export default function App() {
                         Prices rise as departure approaches — book early!
                       </div>
                     </div>
+                    
                   )}
 
                   {/* Demand meter */}
@@ -979,7 +999,28 @@ export default function App() {
                       </span>
                       <span style={{ color:"#64748b" }}>Critical</span>
                     </div>
-                  </div>
+                  </div>  // 👈 end of Demand meter
+
+{/* 🔥 ADD HERE */}
+{recommendations.length > 0 && (
+  <div style={{ ...card, padding:18, marginTop:16 }}>
+    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>
+      Recommended Flights
+    </h3>
+
+    {recommendations.map(r => (
+      <div key={r.flightId} style={{
+        border: "1px solid rgba(255,255,255,.1)",
+        padding: 10,
+        marginTop: 8,
+        borderRadius: 8
+      }}>
+        {r.airline} — {r.from} → {r.to}
+      </div>
+    ))}
+  </div>
+)}
+
                 </div>
               </div>
             )}
@@ -1110,7 +1151,7 @@ export default function App() {
             {adminView==="overview" && (
               <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:20 }}>
                 <div style={{ ...card, padding:24 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:16 }}><AiTag /><span style={{ fontWeight:700, fontSize:14 }}>Revenue Trend (₹)</span></div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:16 }}><AiTag label="ML + Demand Pricing" /><span style={{ fontWeight:700, fontSize:14 }}>Revenue Trend (₹)</span></div>
                   <ResponsiveContainer width="100%" height={230}>
                     <AreaChart data={[{m:"Oct",r:120000},{m:"Nov",r:155000},{m:"Dec",r:210000},{m:"Jan",r:182000},{m:"Feb",r:167000},{m:"Mar",r:adminStats?.totalRevenue||240000}]}>
                       <defs>
@@ -1127,7 +1168,7 @@ export default function App() {
                   </ResponsiveContainer>
                 </div>
                 <div style={{ ...card, padding:24 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:16 }}><AiTag /><span style={{ fontWeight:700, fontSize:14 }}>Route Distribution</span></div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:16 }}><AiTag label="ML + Demand Pricing" /><span style={{ fontWeight:700, fontSize:14 }}>Route Distribution</span></div>
                   <ResponsiveContainer width="100%" height={230}>
                     <PieChart>
                       <Pie data={[{n:"DEL-BOM",v:34},{n:"DEL-BLR",v:22},{n:"BOM-MAA",v:18},{n:"DEL-HYD",v:14},{n:"Others",v:12}]}
@@ -1145,7 +1186,7 @@ export default function App() {
             {adminView==="flights" && (
               <div style={{ ...card, overflow:"hidden" }}>
                 <div style={{ padding:"16px 24px", borderBottom:"1px solid rgba(255,255,255,.06)", display:"flex", alignItems:"center", gap:8 }}>
-                  <AiTag /><span style={{ fontWeight:700 }}>Live Flight Performance — MongoDB</span>
+                  <AiTag label="ML + Demand Pricing" /><span style={{ fontWeight:700 }}>Live Flight Performance — MongoDB</span>
                   <PulseDot size={6} />
                 </div>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
@@ -1200,7 +1241,7 @@ export default function App() {
             {adminView==="bookings" && (
               <div style={{ ...card, overflow:"hidden" }}>
                 <div style={{ padding:"16px 24px", borderBottom:"1px solid rgba(255,255,255,.06)", display:"flex", alignItems:"center", gap:8 }}>
-                  <AiTag /><span style={{ fontWeight:700 }}>Recent Bookings — MongoDB Collection</span>
+                  <AiTag label="ML + Demand Pricing" /><span style={{ fontWeight:700 }}>Recent Bookings — MongoDB Collection</span>
                   <span style={{ fontSize:12, color:"#10b981" }}>Auto-updates on new booking</span>
                 </div>
                 {adminBookings.length===0 ? (

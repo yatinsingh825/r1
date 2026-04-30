@@ -12,6 +12,22 @@ const app = express();
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
+
+function estimateDemand(flight, daysLeft) {
+  let demand = 0.5;
+
+  // peak hours
+  if (flight.departure_time === "Evening") demand += 0.2;
+
+  // shorter routes → higher demand
+  if (flight.duration < 2.5) demand += 0.15;
+
+  // urgency
+  if (daysLeft < 5) demand += 0.3;
+
+  return Math.min(demand, 1);
+}
+
 // ─── AI SERVICE ───────────────────────────────────────────────────────────────
 async function getAIPrice(flight, days) {
   try {
@@ -34,23 +50,52 @@ async function getAIPrice(flight, days) {
   }
 }
 
+async function getAIData(flight, days) {
+  const res = await axios.post("http://localhost:8000/predict", {
+    airline: flight.airline,
+    source_city: flight.from,
+    destination_city: flight.to,
+    departure_time: "Morning",
+    stops: "zero",
+    class: "Economy",
+    duration: 2.5,
+    days_left: days
+  });
+
+  return res.data;
+}
+
+function finalPricing(basePrice, demandScore, flight, daysLeft) {
+  let price = basePrice;
+
+  price *= 1 + demandScore;
+
+  const seatRatio = 1 - (flight.availableSeats / flight.totalSeats);
+  price *= 1 + seatRatio;
+
+  price *= 1 + (1 / (daysLeft + 1));
+
+  return Math.round(price);
+}
+
 function applyRealWorldPricing(basePrice, flight, daysLeft) {
-  let price = Number(basePrice) || 3000;
+  let price = Number(basePrice);
 
-  if (flight.demandIndex > 0.8) price *= 1.5;
-  else if (flight.demandIndex > 0.6) price *= 1.3;
-  else if (flight.demandIndex > 0.4) price *= 1.15;
+  // deterministic adjustments only
+  const demandFactor = 1 + (flight.demandIndex || 0) * 0.5;
 
-  if (flight.availableSeats < 5) price *= 1.6;
-  else if (flight.availableSeats < 10) price *= 1.3;
+  const seatFactor =
+    flight.availableSeats < 5 ? 1.5 :
+    flight.availableSeats < 10 ? 1.3 : 1.1;
 
-  if (daysLeft < 3) price *= 1.8;
-  else if (daysLeft < 7) price *= 1.4;
-  else if (daysLeft < 15) price *= 1.2;
+  const timeFactor =
+    daysLeft < 3 ? 1.8 :
+    daysLeft < 7 ? 1.4 :
+    daysLeft < 15 ? 1.2 : 1.0;
 
-  price += Math.random() * 400;
+  price = price * demandFactor * seatFactor * timeFactor;
 
-  return Math.max(Math.round(price), 2000);
+  return Math.round(price);
 }
 
 // ─── SSE CLIENTS ──────────────────────────────────────────────────────────────
@@ -108,6 +153,15 @@ app.get('/api/stream', (req, res) => {
     sseClients.delete(res);
   });
 });
+
+
+function adjustWithFeedback(price, demandScore) {
+  if (demandScore > 0.7) {
+    return price * 1.1; // increase
+  } else {
+    return price * 0.95; // decrease
+  }
+}
 
 // ─── REAL-TIME ENGINE ─────────────────────────────────────────────────────────
 async function startRealTimeEngine() {
@@ -258,11 +312,13 @@ app.post('/api/bookings', auth, async (req, res) => {
     const { flightId, seatNumber, seatIndex, travelDate, passengerName } = req.body;
 
     const flight = await Flight.findOne({ flightId });
-
     if (!flight) return res.status(404).json({ error: 'Flight not found' });
 
+    // 🔥 AI Pricing
     let basePrice = await getAIPrice(flight, 14);
-let price = applyRealWorldPricing(basePrice, flight, 14);
+    let price = applyRealWorldPricing(basePrice, flight, 14);
+
+    // 🔥 CREATE BOOKING
     const booking = await Booking.create({
       bookingRef: "BK" + Date.now(),
       userId: req.user.id,
@@ -275,13 +331,26 @@ let price = applyRealWorldPricing(basePrice, flight, 14);
       status: 'Confirmed'
     });
 
+    // 🔥 STORE DATA FOR FUTURE TRAINING (CORRECT PLACE)
+    const fs = require("fs");
+
+    const logData = {
+      airline: flight.airline,
+      source_city: flight.from,
+      destination_city: flight.to,
+      duration: flight.duration,
+      days_left: 14,
+      price: price
+    };
+
+    fs.appendFileSync("training_log.json", JSON.stringify(logData) + "\n");
+
     res.json({ booking });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-
 app.get('/api/bookings/my', auth, async (req, res) => {
   try {
     const bookings = await Booking.find({ userId: req.user.id });
@@ -300,6 +369,50 @@ app.get('/api/admin/stats', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.get("/api/flights/:id/recommendations", async (req, res) => {
+  const flightId = req.params.id;
+
+  // find users who booked this flight
+  const users = await Booking.find({ flightId }).distinct("userId");
+
+  // find other flights booked by same users
+  const similarBookings = await Booking.find({
+    userId: { $in: users },
+    flightId: { $ne: flightId }
+  });
+
+  // count frequency
+  const freq = {};
+  similarBookings.forEach(b => {
+    freq[b.flightId] = (freq[b.flightId] || 0) + 1;
+  });
+
+  // sort
+  const sorted = Object.entries(freq)
+    .sort((a,b)=>b[1]-a[1])
+    .slice(0,5);
+
+  // fetch flight data
+  const flights = await Flight.find({
+    flightId: { $in: sorted.map(s=>s[0]) }
+  });
+
+  res.json(flights);
+});
+
+const { exec } = require("child_process");
+
+setInterval(() => {
+  console.log("🔁 Retraining model...");
+
+  exec("python ../ai-model/train.py", (err, stdout) => {
+    if (err) return console.log("Training error:", err);
+
+    console.log("✅ Model retrained");
+  });
+
+}, 600000); // every 10 min
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
